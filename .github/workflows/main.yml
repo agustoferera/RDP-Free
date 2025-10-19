@@ -1,55 +1,85 @@
-name: Windows RDP via Tailscale
-
+name: Windows RDP with Tailscale (Final Full Version)
 on:
   workflow_dispatch:
 
 jobs:
   rdp-job:
+    name: Create Secure Windows RDP Session via Tailscale
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 180
 
     steps:
-      - name: Enable RDP
+      # 1️⃣ Cek repo agar workflow stabil
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Aktifkan RDP dan firewall
+      - name: Enable Remote Desktop Access
+        shell: pwsh
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Write-Host "Aktifkan RDP dan firewall Windows..."
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Restart-Service -Name TermService -Force
+          Write-Host "✅ Remote Desktop aktif dan firewall telah diatur!"
 
-      - name: Create RDP User
+      # 3️⃣ Buat akun RDP admin secara acak
+      - name: Create Random Admin Account
+        id: user
+        shell: pwsh
         run: |
-          $password = -join ((33..126) | Get-Random -Count 16 | % {[char]$_})
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+          $chars = (33..126) | ForEach-Object { [char]$_ }
+          $password = -join (1..16 | ForEach-Object { Get-Random -InputObject $chars })
+          net user GitRDP $password /add
+          net localgroup administrators GitRDP /add
+          Add-Content $env:GITHUB_ENV "RDP_PASS=$password"
+          Write-Host "✅ User created: GitRDP / $password"
 
-      - name: Install Tailscale
+      # 4️⃣ Instal Tailscale (pakai EXE, bukan MSI → hindari error 1603)
+      - name: Install Tailscale (EXE)
+        shell: pwsh
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $out = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          Start-Process msiexec.exe -ArgumentList "/i $out /quiet /norestart" -Wait
+          Write-Host "Mengunduh dan menginstal Tailscale EXE..."
+          $exe = "$env:TEMP\tailscale-setup.exe"
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $exe
+          Start-Process $exe -ArgumentList "/quiet /norestart" -Wait
+          Write-Host "✅ Tailscale terinstal di $env:ProgramFiles."
 
-      - name: Connect Tailscale
+      # 5️⃣ Hubungkan ke jaringan Tailscale (pakai Auth Key)
+      - name: Connect to Tailnet
+        shell: pwsh
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${{ github.run_id }}
-          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          $authkey = "${{ secrets.TS_AUTH_KEY }}"
+          if ([string]::IsNullOrEmpty($authkey)) {
+            Write-Host "⚠️ Tidak ada Auth Key, jalankan login manual lewat browser."
+            & $tailscale up --hostname=rdp-${{ github.run_id }} --accept-dns=true --accept-routes=true
+          } else {
+            Write-Host "🔐 Menghubungkan ke Tailscale dengan Auth Key..."
+            & $tailscale up --auth-key=$authkey --hostname=rdp-${{ github.run_id }} --accept-dns=true --accept-routes=true
+          }
+          if ($LASTEXITCODE -ne 0) { throw "❌ Gagal konek ke Tailnet." }
+          Write-Host "✅ Berhasil tersambung ke Tailnet!"
 
-      - name: Show Connection Info
+      # 6️⃣ Tampilkan IP dan kredensial RDP
+      - name: Display Connection Info
+        shell: pwsh
         run: |
-          Write-Host "`n============================"
+          $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          Write-Host "`n========================================"
           Write-Host "✅ RDP Connected Successfully"
-          Write-Host "IP Address (Tailscale): $env:TS_IP"
-          Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASS"
-          Write-Host "============================`n"
+          Write-Host "🌐 IP Address (Tailscale): $ip"
+          Write-Host "👤 Username: GitRDP"
+          Write-Host "🔑 Password: $env:RDP_PASS"
+          Write-Host "⚙️ Jalankan: mstsc.exe → Masukkan IP & akun di atas."
+          Write-Host "========================================`n"
 
-      - name: Keep Alive
+      # 7️⃣ Pastikan Tailscale tetap aktif dan RDP terjaga
+      - name: Keep RDP Session Alive (2 Hours)
+        shell: pwsh
         run: |
-          while ($true) {
-            Write-Host "[$(Get-Date)] RDP Running..."
-            Start-Sleep -Seconds 300
+          Write-Host "⚙️ Menjaga RDP aktif selama 2 jam..."
+          for ($i=0; $i -lt 120; $i++) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP aktif..."
+            Start-Sleep -Seconds 60
           }
