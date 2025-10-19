@@ -72,12 +72,12 @@ jobs:
           Write-Host "Gunakan aplikasi mstsc.exe dengan IP di atas."
           Write-Host "==============================="
 
-      # 6️⃣ Jaga agar sesi tetap hidup selama 6 jam
+      # 6️⃣ Jaga agar sesi tetap hidup selama 12 jam
       - name: Keep Session Alive
         shell: pwsh
         run: |
-          Write-Host "🕒 Menjaga sesi RDP aktif selama 6 jam (360 menit)..."
-          for ($i=0; $i -lt 360; $i++) {
+          Write-Host "🕒 Menjaga sesi RDP aktif selama 12 jam (720 menit)..."
+          for ($i=0; $i -lt 720; $i++) {
             Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Session RDP aktif..."
             Start-Sleep -Seconds 60
           }
