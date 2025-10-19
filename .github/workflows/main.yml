@@ -1,77 +1,55 @@
-name: Windows RDP with Tailscale (No MSI, Auto-Working)
+name: Windows RDP via Tailscale
 
 on:
   workflow_dispatch:
 
 jobs:
-  windows-rdp:
-    name: Create Windows RDP Session
+  rdp-job:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 1. Install Tailscale manually via EXE (bukan MSI)
-      - name: Install Tailscale manually
-        shell: pwsh
+      - name: Enable RDP
         run: |
-          Write-Host "Installing Tailscale using EXE..."
-          $installer = "$env:TEMP\tailscale-setup.exe"
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $installer
-          Start-Process $installer -ArgumentList "/quiet /norestart" -Wait
-          Write-Host "✅ Tailscale installed successfully!"
-
-      # 2. Connect Runner to Tailnet (use Auth Key if available)
-      - name: Connect to Tailnet
-        shell: pwsh
-        run: |
-          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
-          $authkey = "${{ secrets.TS_AUTH_KEY }}"
-
-          if ([string]::IsNullOrEmpty($authkey)) {
-              Write-Host "No AuthKey provided. Manual login required."
-              & $tailscale up --hostname=github-runner --accept-dns=true --accept-routes=true
-          } else {
-              Write-Host "Using AuthKey to connect to Tailscale."
-              & $tailscale up --auth-key=$authkey --hostname=github-runner --accept-dns=true --accept-routes=true
-          }
-
-          if ($LASTEXITCODE -ne 0) {
-              Write-Error "Tailscale connection failed."
-              exit 1
-          }
-
-          Write-Host "✅ Connected to Tailscale."
-
-      # 3. Enable RDP + create admin user
-      - name: Enable RDP Access
-        shell: pwsh
-        run: |
-          Write-Host "Enabling RDP and configuring firewall..."
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          net user tailscaleuser P@ssw0rd123 /add
-          net localgroup administrators tailscaleuser /add
-          Write-Host "✅ RDP is now enabled!"
+          Restart-Service -Name TermService -Force
 
-      # 4. Display connection info
-      - name: Display Tailscale Connection Info
-        shell: pwsh
+      - name: Create RDP User
         run: |
-          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
-          $ip = & $tailscale ip -4
-          Write-Host "✅ Tailscale connection established!"
-          Write-Host "🖥️ Connect using:"
-          Write-Host "IP Address   : $ip"
-          Write-Host "Username     : tailscaleuser"
-          Write-Host "Password     : P@ssw0rd123"
-          Write-Host "Login via mstsc.exe on your PC."
+          $password = -join ((33..126) | Get-Random -Count 16 | % {[char]$_})
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      # 5. Keep RDP alive for 2 hours
-      - name: Keep session alive (2 hours)
-        shell: pwsh
+      - name: Install Tailscale
         run: |
-          Write-Host "⏳ Session active for 2 hours for testing..."
-          Start-Sleep -Seconds 7200
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $out = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          Start-Process msiexec.exe -ArgumentList "/i $out /quiet /norestart" -Wait
+
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${{ github.run_id }}
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+
+      - name: Show Connection Info
+        run: |
+          Write-Host "`n============================"
+          Write-Host "✅ RDP Connected Successfully"
+          Write-Host "IP Address (Tailscale): $env:TS_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "============================`n"
+
+      - name: Keep Alive
+        run: |
+          while ($true) {
+            Write-Host "[$(Get-Date)] RDP Running..."
+            Start-Sleep -Seconds 300
+          }
